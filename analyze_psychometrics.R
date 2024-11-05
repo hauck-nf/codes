@@ -9,36 +9,39 @@
 #    a) "itemcode": with the names of the items to be analyzed (matching the names in the data frame);
 #    b) "key": with each item coded as 1 when it is positively correlated with its corresponding factor (positively-keyed), and -1 when it is negatively correlated with the factor (positively-keyed);
 #    c) "scale": with the name of the scale where the item should be allocated in the calculation of scores and internal consistency estimates
-
+#    d) "order": with the position of each item relative to the complete instrument item set; the order should restart from 1 to n for each instrument
 #ANALYSE_PSYCHOMETRICS FUNCTION
 analyze_psychometrics <- function(data, dictionary) {
   library(dplyr)
   library(psych)
+  
+  # Ajustar a codificação dos itens de acordo com a chave positiva/negativa
   dictionary <- dictionary %>%
-    mutate(order2 = ifelse(key == 1, order, order * (-1)))
+    mutate(order2 = ifelse(key == 1, itemcode, paste0("-", itemcode)))
   
+  # Cria a lista de chaves para cada escala usando nest_by
   keys.list <- dictionary %>%
-    select(scale, order2) %>%
     group_by(scale) %>%
-    summarize(order2 = list(unique(order2))) %>%
-    pull(order2)
+    nest_by() %>%
+    mutate(keys = list(data$order2)) %>%
+    pull(keys)
   
-  keys <- make.keys(nvars = nrow(dictionary), keys.list = keys.list, item.labels = dictionary$itemcode)
+  # Define as chaves para scoreItems
+  keys <- make.keys(nvars = ncol(data), keys.list = keys.list, item.labels = dictionary$itemcode)
   colnames(keys) <- unique(dictionary$scale)
   
+  # Executa a análise psicométrica com scoreItems
   psychometrics <- scoreItems(
     keys = keys,
-    items = data[, rownames(keys)],
+    items = data[, dictionary$itemcode],
     missing = TRUE,
-    impute = "none",
-    totals = FALSE,
+    impute = "none"
   )
   
+  # Combina os escores calculados com os dados originais
   result <- list(
     psychometrics = psychometrics,
-    scores = cbind(data,
-                   as.data.frame(psychometrics$scores)
-    )
+    scores = cbind(data, as.data.frame(psychometrics$scores))
   )
   
   return(result)
