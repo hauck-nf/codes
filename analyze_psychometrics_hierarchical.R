@@ -11,9 +11,11 @@
 #    c) "higher_order": with the name of the higher order factor that explains the item (or its first order factor) and that should be used as a guide to form broader scale scores
 #    d) "scale": with the name of the scale where the item should be allocated in the calculation of scores and internal consistency estimates
 #ANALYSE_PSYCHOMETRICS FUNCTION
-analyze_psychometrics_hierarchical <- function(data, dictionary,
-                                               missing = TRUE,
-                                               impute = "none") {
+analyze_psychometrics_hierarchical <- function(
+  data,
+  dictionary,
+  min_items_per_scale = 2
+) {
   
   # -----------------------------
   # 1) Basic validation
@@ -50,9 +52,43 @@ analyze_psychometrics_hierarchical <- function(data, dictionary,
     stop("These itemcodes are not present in data: ",
          paste(missing_items, collapse = ", "))
   }
+
+  # -----------------------------
+  # 2) Cheking scales and items
+  # -----------------------------
+# Verificar número de itens por escala ------------------------------------
+
+if (!"scale" %in% names(dictionary)) {
+  stop("The dictionary must contain a 'scale' column.")
+}
+
+scale_counts <- dictionary %>%
+  dplyr::filter(!is.na(scale), scale != "") %>%
+  dplyr::count(scale, name = "n_items")
+
+invalid_scales <- scale_counts %>%
+  dplyr::filter(n_items < min_items_per_scale) %>%
+  dplyr::pull(scale)
+
+valid_scales <- scale_counts %>%
+  dplyr::filter(n_items >= min_items_per_scale) %>%
+  dplyr::pull(scale)
+
+if (length(invalid_scales) > 0) {
+  warning(
+    paste0(
+      "The following scales have fewer than ",
+      min_items_per_scale,
+      " items and will be skipped: ",
+      paste(invalid_scales, collapse = ", ")
+    ),
+    call. = FALSE
+  )
+}
+
   
   # -----------------------------
-  # 2) Helper: extract alpha/G6 safely
+  # 3) Helper: extract alpha/G6 safely
   # -----------------------------
   extract_reliability <- function(scoreitems_obj) {
     
@@ -88,7 +124,7 @@ analyze_psychometrics_hierarchical <- function(data, dictionary,
   }
   
   # -----------------------------
-  # 3) Helper: run one construct
+  # 4) Helper: run one construct
   # -----------------------------
   run_one_construct <- function(data, dict_subset, construct_name,
                               instrument_name, level_name,
@@ -166,7 +202,7 @@ analyze_psychometrics_hierarchical <- function(data, dictionary,
 }
   
   # -----------------------------
-  # 4) Main loop by instrument
+  # 5) Main loop by instrument
   # -----------------------------
   instruments <- unique(dictionary$instrument)
   
