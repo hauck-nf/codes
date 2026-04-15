@@ -111,7 +111,28 @@ analyze_psychometrics_hierarchical <- function(
   }
   
   # -----------------------------
-  # 3) Helper: run one construct
+  # 3) Helper: reverse keyed items temporarily for alpha()
+  # -----------------------------
+  build_alpha_input <- function(items_df, key_vector) {
+    items_df <- as.data.frame(items_df)
+    
+    non_numeric <- names(items_df)[!vapply(items_df, is.numeric, logical(1))]
+    if (length(non_numeric) > 0) {
+      stop(
+        "The following items are not numeric and cannot be analyzed with psych::alpha(): ",
+        paste(non_numeric, collapse = ", ")
+      )
+    }
+    
+    psych::reverse.code(
+      keys = key_vector,
+      items = items_df
+    ) %>%
+      as.data.frame()
+  }
+  
+  # -----------------------------
+  # 4) Helper: run one construct
   # -----------------------------
   run_one_construct <- function(
     data,
@@ -149,6 +170,17 @@ analyze_psychometrics_hierarchical <- function(
     
     rel <- extract_reliability(sc_result)
     
+    # Detailed alpha() object
+    items_for_alpha <- build_alpha_input(
+      items_df = items_df,
+      key_vector = dict_subset$key
+    )
+    
+    alpha_result <- psych::alpha(
+      x = items_for_alpha,
+      check.keys = FALSE
+    )
+    
     score_df <- as.data.frame(sc_result$scores)
     names(score_df) <- paste(instrument_name, construct_name, sep = "__")
     score_vector <- score_df[[1]]
@@ -172,6 +204,9 @@ analyze_psychometrics_hierarchical <- function(
       n_items = ncol(items_df),
       alpha = rel$alpha,
       G6 = rel$G6,
+      alpha_raw = if (!is.null(alpha_result$total$raw_alpha)) alpha_result$total$raw_alpha else NA_real_,
+      alpha_std = if (!is.null(alpha_result$total$std.alpha)) alpha_result$total$std.alpha else NA_real_,
+      average_r = if (!is.null(alpha_result$total$average_r)) alpha_result$total$average_r else NA_real_,
       stringsAsFactors = FALSE
     )
     
@@ -186,6 +221,7 @@ analyze_psychometrics_hierarchical <- function(
     
     list(
       scoreitems = sc_result,
+      alpha_details = alpha_result,
       scores = score_df,
       reliability = reliability_df,
       descriptives = descriptives_df,
@@ -194,7 +230,7 @@ analyze_psychometrics_hierarchical <- function(
   }
   
   # -----------------------------
-  # 4) Main loop by instrument
+  # 5) Main loop by instrument
   # -----------------------------
   instruments <- unique(dictionary$instrument)
   
@@ -204,6 +240,11 @@ analyze_psychometrics_hierarchical <- function(
   all_descriptives <- list()
   all_audit <- list()
   all_skipped <- list()
+  
+  Classical_Test_Theory_Analysis <- list(
+    scale = list(),
+    higher_order = list()
+  )
   
   for (inst in instruments) {
     
@@ -218,10 +259,9 @@ analyze_psychometrics_hierarchical <- function(
     instrument_reliability <- list()
     instrument_descriptives <- list()
     instrument_audit <- list()
-    instrument_skipped <- list()
     
     # -----------------------------
-    # 4a) Check first-order scales
+    # 5a) Check first-order scales
     # -----------------------------
     scale_counts <- dict_inst %>%
       dplyr::filter(!is.na(scale), scale != "") %>%
@@ -253,7 +293,7 @@ analyze_psychometrics_hierarchical <- function(
     }
     
     # -----------------------------
-    # 4b) Run first-order scales
+    # 5b) Run first-order scales
     # -----------------------------
     for (sc in valid_scales) {
       dict_sc <- dict_inst[dict_inst$scale == sc, , drop = FALSE]
@@ -273,10 +313,12 @@ analyze_psychometrics_hierarchical <- function(
       instrument_reliability[[paste("first", sc, sep = "__")]] <- res_sc$reliability
       instrument_descriptives[[paste("first", sc, sep = "__")]] <- res_sc$descriptives
       instrument_audit[[paste("first", sc, sep = "__")]] <- res_sc$audit
+      
+      Classical_Test_Theory_Analysis$scale[[paste(inst, sc, sep = "__")]] <- res_sc$alpha_details
     }
     
     # -----------------------------
-    # 4c) Check higher-order scales
+    # 5c) Check higher-order scales
     # -----------------------------
     higher_counts <- dict_inst %>%
       dplyr::filter(!is.na(higher_order), higher_order != "") %>%
@@ -308,7 +350,7 @@ analyze_psychometrics_hierarchical <- function(
     }
     
     # -----------------------------
-    # 4d) Run higher-order scales
+    # 5d) Run higher-order scales
     # -----------------------------
     for (ho in valid_higher) {
       dict_ho <- dict_inst[dict_inst$higher_order == ho, , drop = FALSE]
@@ -328,10 +370,12 @@ analyze_psychometrics_hierarchical <- function(
       instrument_reliability[[paste("higher", ho, sep = "__")]] <- res_ho$reliability
       instrument_descriptives[[paste("higher", ho, sep = "__")]] <- res_ho$descriptives
       instrument_audit[[paste("higher", ho, sep = "__")]] <- res_ho$audit
+      
+      Classical_Test_Theory_Analysis$higher_order[[paste(inst, ho, sep = "__")]] <- res_ho$alpha_details
     }
     
     # -----------------------------
-    # 4e) Combine outputs
+    # 5e) Combine outputs
     # -----------------------------
     instrument_scores_df <- if (length(instrument_scores) > 0) {
       dplyr::bind_cols(instrument_scores)
@@ -389,6 +433,7 @@ analyze_psychometrics_hierarchical <- function(
     reliability = reliability_df,
     descriptives = descriptives_df,
     audit = audit_df,
-    skipped_constructs = skipped_constructs_df
+    skipped_constructs = skipped_constructs_df,
+    Classical_Test_Theory_Analysis = Classical_Test_Theory_Analysis
   )
 }
