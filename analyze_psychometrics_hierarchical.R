@@ -10,11 +10,26 @@
 #    b) "key": with each item coded as 1 when it is positively correlated with its corresponding factor (positively-keyed), and -1 when it is negatively correlated with the factor (positively-keyed);
 #    c) "higher_order": with the name of the higher order factor that explains the item (or its first order factor) and that should be used as a guide to form broader scale scores
 #    d) "scale": with the name of the scale where the item should be allocated in the calculation of scores and internal consistency estimates
-#ANALYSE_PSYCHOMETRICS FUNCTION
+# PERFORM BASIC ANALYSIS ON PSYCHOMETRIC SCALES
+# The function analyze_psychometrics_hierarchical uses psych::scoreItems to produce:
+# 1) descriptive analysis and internal consistency estimates (alpha and G6)
+# 2) a data frame containing the original data plus the calculated scores
+#
+# Required inputs:
+# 1) a data frame called data containing persons x variables
+# 2) a dictionary containing the following metadata columns:
+#    a) "itemcode": names of the items to be analyzed (matching names in data)
+#    b) "key": 1 for positively keyed items, -1 for negatively keyed items
+#    c) "higher_order": name of the higher-order factor
+#    d) "scale": name of the first-order scale
+#    e) "instrument": name of the instrument
+
 analyze_psychometrics_hierarchical <- function(
   data,
   dictionary,
-  min_items_per_scale = 2
+  min_items_per_scale = 2,
+  missing = TRUE,
+  impute = "none"
 ) {
   
   # -----------------------------
@@ -32,8 +47,10 @@ analyze_psychometrics_hierarchical <- function(
   missing_cols <- setdiff(required_cols, names(dictionary))
   
   if (length(missing_cols) > 0) {
-    stop("The dictionary is missing required columns: ",
-         paste(missing_cols, collapse = ", "))
+    stop(
+      "The dictionary is missing required columns: ",
+      paste(missing_cols, collapse = ", ")
+    )
   }
   
   if (!all(dictionary$key %in% c(1, -1))) {
@@ -42,53 +59,23 @@ analyze_psychometrics_hierarchical <- function(
   
   if (anyDuplicated(dictionary$itemcode) > 0) {
     duplicated_items <- unique(dictionary$itemcode[duplicated(dictionary$itemcode)])
-    warning("Duplicated itemcodes detected in dictionary: ",
-            paste(duplicated_items, collapse = ", "),
-            ". This is acceptable only if duplication is intentional for higher-order scoring.")
+    warning(
+      "Duplicated itemcodes detected in dictionary: ",
+      paste(duplicated_items, collapse = ", "),
+      ". This is acceptable only if duplication is intentional for higher-order scoring."
+    )
   }
   
   missing_items <- setdiff(unique(dictionary$itemcode), names(data))
   if (length(missing_items) > 0) {
-    stop("These itemcodes are not present in data: ",
-         paste(missing_items, collapse = ", "))
+    stop(
+      "These itemcodes are not present in data: ",
+      paste(missing_items, collapse = ", ")
+    )
   }
-
-  # -----------------------------
-  # 2) Cheking scales and items
-  # -----------------------------
-# Verificar número de itens por escala ------------------------------------
-
-if (!"scale" %in% names(dictionary)) {
-  stop("The dictionary must contain a 'scale' column.")
-}
-
-scale_counts <- dictionary %>%
-  dplyr::filter(!is.na(scale), scale != "") %>%
-  dplyr::count(scale, name = "n_items")
-
-invalid_scales <- scale_counts %>%
-  dplyr::filter(n_items < min_items_per_scale) %>%
-  dplyr::pull(scale)
-
-valid_scales <- scale_counts %>%
-  dplyr::filter(n_items >= min_items_per_scale) %>%
-  dplyr::pull(scale)
-
-if (length(invalid_scales) > 0) {
-  warning(
-    paste0(
-      "The following scales have fewer than ",
-      min_items_per_scale,
-      " items and will be skipped: ",
-      paste(invalid_scales, collapse = ", ")
-    ),
-    call. = FALSE
-  )
-}
-
   
   # -----------------------------
-  # 3) Helper: extract alpha/G6 safely
+  # 2) Helper: extract alpha/G6 safely
   # -----------------------------
   extract_reliability <- function(scoreitems_obj) {
     
@@ -124,85 +111,90 @@ if (length(invalid_scales) > 0) {
   }
   
   # -----------------------------
-  # 4) Helper: run one construct
+  # 3) Helper: run one construct
   # -----------------------------
-  run_one_construct <- function(data, dict_subset, construct_name,
-                              instrument_name, level_name,
-                              missing = TRUE, impute = "none") {
-  
-  dict_subset <- dict_subset[!duplicated(dict_subset$itemcode), , drop = FALSE]
-  
-  items_df <- data[, dict_subset$itemcode, drop = FALSE]
-  
-  keyed_items <- ifelse(
-    dict_subset$key == 1,
-    dict_subset$itemcode,
-    paste0("-", dict_subset$itemcode)
-  )
-  
-  keys_list <- stats::setNames(list(keyed_items), construct_name)
-  
-  keys_matrix <- psych::make.keys(
-    nvars = ncol(items_df),
-    keys.list = keys_list,
-    item.labels = colnames(items_df)
-  )
-  
-  sc_result <- psych::scoreItems(
-    keys = keys_matrix,
-    items = items_df,
-    missing = missing,
-    impute = impute
-  )
-  
-  rel <- extract_reliability(sc_result)
-  
-  score_df <- as.data.frame(sc_result$scores)
-  names(score_df) <- paste(instrument_name, construct_name, sep = "__")
-  score_vector <- score_df[[1]]
-  
-  descriptives_df <- data.frame(
-    instrument = instrument_name,
-    level = level_name,
-    scale = construct_name,
-    n = sum(!is.na(score_vector)),
-    mean = mean(score_vector, na.rm = TRUE),
-    sd = stats::sd(score_vector, na.rm = TRUE),
-    min = min(score_vector, na.rm = TRUE),
-    max = max(score_vector, na.rm = TRUE),
-    stringsAsFactors = FALSE
-  )
-  
-  reliability_df <- data.frame(
-    instrument = instrument_name,
-    level = level_name,
-    scale = construct_name,
-    n_items = ncol(items_df),
-    alpha = rel$alpha,
-    G6 = rel$G6,
-    stringsAsFactors = FALSE
-  )
-  
-  audit_df <- data.frame(
-    instrument = instrument_name,
-    level = level_name,
-    scale = construct_name,
-    itemcode = dict_subset$itemcode,
-    key = dict_subset$key,
-    stringsAsFactors = FALSE
-  )
-  
-  list(
-    scoreitems = sc_result,
-    scores = score_df,
-    reliability = reliability_df,
-    descriptives = descriptives_df,
-    audit = audit_df
-  )
-}
+  run_one_construct <- function(
+    data,
+    dict_subset,
+    construct_name,
+    instrument_name,
+    level_name,
+    missing = TRUE,
+    impute = "none"
+  ) {
+    
+    dict_subset <- dict_subset[!duplicated(dict_subset$itemcode), , drop = FALSE]
+    items_df <- data[, dict_subset$itemcode, drop = FALSE]
+    
+    keyed_items <- ifelse(
+      dict_subset$key == 1,
+      dict_subset$itemcode,
+      paste0("-", dict_subset$itemcode)
+    )
+    
+    keys_list <- stats::setNames(list(keyed_items), construct_name)
+    
+    keys_matrix <- psych::make.keys(
+      nvars = ncol(items_df),
+      keys.list = keys_list,
+      item.labels = colnames(items_df)
+    )
+    
+    sc_result <- psych::scoreItems(
+      keys = keys_matrix,
+      items = items_df,
+      missing = missing,
+      impute = impute
+    )
+    
+    rel <- extract_reliability(sc_result)
+    
+    score_df <- as.data.frame(sc_result$scores)
+    names(score_df) <- paste(instrument_name, construct_name, sep = "__")
+    score_vector <- score_df[[1]]
+    
+    descriptives_df <- data.frame(
+      instrument = instrument_name,
+      level = level_name,
+      scale = construct_name,
+      n = sum(!is.na(score_vector)),
+      mean = mean(score_vector, na.rm = TRUE),
+      sd = stats::sd(score_vector, na.rm = TRUE),
+      min = min(score_vector, na.rm = TRUE),
+      max = max(score_vector, na.rm = TRUE),
+      stringsAsFactors = FALSE
+    )
+    
+    reliability_df <- data.frame(
+      instrument = instrument_name,
+      level = level_name,
+      scale = construct_name,
+      n_items = ncol(items_df),
+      alpha = rel$alpha,
+      G6 = rel$G6,
+      stringsAsFactors = FALSE
+    )
+    
+    audit_df <- data.frame(
+      instrument = instrument_name,
+      level = level_name,
+      scale = construct_name,
+      itemcode = dict_subset$itemcode,
+      key = dict_subset$key,
+      stringsAsFactors = FALSE
+    )
+    
+    list(
+      scoreitems = sc_result,
+      scores = score_df,
+      reliability = reliability_df,
+      descriptives = descriptives_df,
+      audit = audit_df
+    )
+  }
   
   # -----------------------------
-  # 5) Main loop by instrument
+  # 4) Main loop by instrument
   # -----------------------------
   instruments <- unique(dictionary$instrument)
   
@@ -211,6 +203,7 @@ if (length(invalid_scales) > 0) {
   all_reliability <- list()
   all_descriptives <- list()
   all_audit <- list()
+  all_skipped <- list()
   
   for (inst in instruments) {
     
@@ -225,12 +218,44 @@ if (length(invalid_scales) > 0) {
     instrument_reliability <- list()
     instrument_descriptives <- list()
     instrument_audit <- list()
+    instrument_skipped <- list()
     
-    # First-order
-    first_order_constructs <- unique(dict_inst$scale)
-    first_order_constructs <- first_order_constructs[!is.na(first_order_constructs) & first_order_constructs != ""]
+    # -----------------------------
+    # 4a) Check first-order scales
+    # -----------------------------
+    scale_counts <- dict_inst %>%
+      dplyr::filter(!is.na(scale), scale != "") %>%
+      dplyr::count(scale, name = "n_items")
     
-    for (sc in first_order_constructs) {
+    valid_scales <- scale_counts %>%
+      dplyr::filter(n_items >= min_items_per_scale) %>%
+      dplyr::pull(scale)
+    
+    skipped_scales <- scale_counts %>%
+      dplyr::filter(n_items < min_items_per_scale) %>%
+      dplyr::mutate(
+        instrument = inst,
+        level = "first_order",
+        reason = paste0("fewer than ", min_items_per_scale, " items")
+      ) %>%
+      dplyr::rename(name = scale)
+    
+    if (nrow(skipped_scales) > 0) {
+      warning(
+        paste0(
+          "In instrument '", inst, "', the following first-order scales have fewer than ",
+          min_items_per_scale,
+          " items and were not scored: ",
+          paste(skipped_scales$name, collapse = ", ")
+        ),
+        call. = FALSE
+      )
+    }
+    
+    # -----------------------------
+    # 4b) Run first-order scales
+    # -----------------------------
+    for (sc in valid_scales) {
       dict_sc <- dict_inst[dict_inst$scale == sc, , drop = FALSE]
       
       res_sc <- run_one_construct(
@@ -250,56 +275,112 @@ if (length(invalid_scales) > 0) {
       instrument_audit[[paste("first", sc, sep = "__")]] <- res_sc$audit
     }
     
-    # Higher-order
-    higher_order_constructs <- unique(dict_inst$higher_order)
-    higher_order_constructs <- higher_order_constructs[!is.na(higher_order_constructs) & higher_order_constructs != ""]
+    # -----------------------------
+    # 4c) Check higher-order scales
+    # -----------------------------
+    higher_counts <- dict_inst %>%
+      dplyr::filter(!is.na(higher_order), higher_order != "") %>%
+      dplyr::count(higher_order, name = "n_items")
     
-    if (length(higher_order_constructs) > 0) {
-      for (ho in higher_order_constructs) {
-        dict_ho <- dict_inst[dict_inst$higher_order == ho, , drop = FALSE]
-        
-        res_ho <- run_one_construct(
-          data = data,
-          dict_subset = dict_ho,
-          construct_name = ho,
-          instrument_name = inst,
-          level_name = "higher_order",
-          missing = missing,
-          impute = impute
-        )
-        
-        instrument_results$higher_order[[ho]] <- res_ho$scoreitems
-        instrument_scores[[paste(inst, ho, sep = "__")]] <- res_ho$scores
-        instrument_reliability[[paste("higher", ho, sep = "__")]] <- res_ho$reliability
-        instrument_descriptives[[paste("higher", ho, sep = "__")]] <- res_ho$descriptives
-        instrument_audit[[paste("higher", ho, sep = "__")]] <- res_ho$audit
-      }
+    valid_higher <- higher_counts %>%
+      dplyr::filter(n_items >= min_items_per_scale) %>%
+      dplyr::pull(higher_order)
+    
+    skipped_higher <- higher_counts %>%
+      dplyr::filter(n_items < min_items_per_scale) %>%
+      dplyr::mutate(
+        instrument = inst,
+        level = "higher_order",
+        reason = paste0("fewer than ", min_items_per_scale, " items")
+      ) %>%
+      dplyr::rename(name = higher_order)
+    
+    if (nrow(skipped_higher) > 0) {
+      warning(
+        paste0(
+          "In instrument '", inst, "', the following higher-order scales have fewer than ",
+          min_items_per_scale,
+          " items and were not scored: ",
+          paste(skipped_higher$name, collapse = ", ")
+        ),
+        call. = FALSE
+      )
     }
     
-    instrument_scores_df <- dplyr::bind_cols(instrument_scores)
-    instrument_reliability_df <- dplyr::bind_rows(instrument_reliability)
-    instrument_descriptives_df <- dplyr::bind_rows(instrument_descriptives)
-    instrument_audit_df <- dplyr::bind_rows(instrument_audit)
+    # -----------------------------
+    # 4d) Run higher-order scales
+    # -----------------------------
+    for (ho in valid_higher) {
+      dict_ho <- dict_inst[dict_inst$higher_order == ho, , drop = FALSE]
+      
+      res_ho <- run_one_construct(
+        data = data,
+        dict_subset = dict_ho,
+        construct_name = ho,
+        instrument_name = inst,
+        level_name = "higher_order",
+        missing = missing,
+        impute = impute
+      )
+      
+      instrument_results$higher_order[[ho]] <- res_ho$scoreitems
+      instrument_scores[[paste(inst, ho, sep = "__")]] <- res_ho$scores
+      instrument_reliability[[paste("higher", ho, sep = "__")]] <- res_ho$reliability
+      instrument_descriptives[[paste("higher", ho, sep = "__")]] <- res_ho$descriptives
+      instrument_audit[[paste("higher", ho, sep = "__")]] <- res_ho$audit
+    }
+    
+    # -----------------------------
+    # 4e) Combine outputs
+    # -----------------------------
+    instrument_scores_df <- if (length(instrument_scores) > 0) {
+      dplyr::bind_cols(instrument_scores)
+    } else {
+      data.frame()
+    }
+    
+    instrument_reliability_df <- if (length(instrument_reliability) > 0) {
+      dplyr::bind_rows(instrument_reliability)
+    } else {
+      data.frame()
+    }
+    
+    instrument_descriptives_df <- if (length(instrument_descriptives) > 0) {
+      dplyr::bind_rows(instrument_descriptives)
+    } else {
+      data.frame()
+    }
+    
+    instrument_audit_df <- if (length(instrument_audit) > 0) {
+      dplyr::bind_rows(instrument_audit)
+    } else {
+      data.frame()
+    }
+    
+    instrument_skipped_df <- dplyr::bind_rows(skipped_scales, skipped_higher)
     
     by_instrument[[inst]] <- list(
       scoreitems = instrument_results,
       scores = instrument_scores_df,
       reliability = instrument_reliability_df,
       descriptives = instrument_descriptives_df,
-      audit = instrument_audit_df
+      audit = instrument_audit_df,
+      skipped_constructs = instrument_skipped_df
     )
     
     all_scores[[inst]] <- instrument_scores_df
     all_reliability[[inst]] <- instrument_reliability_df
     all_descriptives[[inst]] <- instrument_descriptives_df
     all_audit[[inst]] <- instrument_audit_df
+    all_skipped[[inst]] <- instrument_skipped_df
   }
   
-  scores_df <- dplyr::bind_cols(all_scores)
+  scores_df <- if (length(all_scores) > 0) dplyr::bind_cols(all_scores) else data.frame()
   data_with_scores <- dplyr::bind_cols(data, scores_df)
   reliability_df <- dplyr::bind_rows(all_reliability)
   descriptives_df <- dplyr::bind_rows(all_descriptives)
   audit_df <- dplyr::bind_rows(all_audit)
+  skipped_constructs_df <- dplyr::bind_rows(all_skipped)
   
   list(
     by_instrument = by_instrument,
@@ -307,6 +388,7 @@ if (length(invalid_scales) > 0) {
     data_with_scores = data_with_scores,
     reliability = reliability_df,
     descriptives = descriptives_df,
-    audit = audit_df
+    audit = audit_df,
+    skipped_constructs = skipped_constructs_df
   )
 }
